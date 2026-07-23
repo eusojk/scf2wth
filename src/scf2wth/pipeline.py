@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -48,9 +49,9 @@ class SiteInputs:
     location_label: str          # human-readable, e.g. "KALAMAZOO_MI" - used for output folder naming
     cli_path: Path               # path to the site's .CLI file
     wtd_path: Path               # path to the site's historical baseline .WTD file
-    station: str                 # 4-letter station code; must match the .CLI/.WTD filename prefix
-    start_year: int
-    end_year: int
+    station: str | None = None   # 4-letter station code; defaults to the .CLI/.WTD filename
+    start_year: int | None = None
+    end_year: int | None = None
     lat: float | None = None
     lon: float | None = None
     warnings: list[str] = field(default_factory=list, repr=False)
@@ -58,6 +59,10 @@ class SiteInputs:
     def __post_init__(self):
         self.cli_path = Path(self.cli_path)
         self.wtd_path = Path(self.wtd_path)
+
+        if self.station is None:
+            self.station = self.cli_path.stem.upper()
+
         if self.cli_path.stem.upper() != self.station.upper():
             raise ValueError(
                 f"station={self.station!r} does not match .CLI filename "
@@ -74,14 +79,20 @@ class SiteInputs:
         try:
             cli_info = read_cli_site_info(self.cli_path)
         except ValueError as e:
-            if self.lat is None or self.lon is None:
+            missing = [
+                name for name, val in (("lat", self.lat), ("lon", self.lon),
+                                        ("start_year", self.start_year),
+                                        ("end_year", self.end_year))
+                if val is None
+            ]
+            if missing:
                 raise ValueError(
-                    f"lat/lon not supplied, and could not be read from "
-                    f"{self.cli_path} to derive them automatically: {e}"
+                    f"{', '.join(missing)} not supplied, and could not be "
+                    f"read from {self.cli_path} to derive them automatically: {e}"
                 ) from e
             self.warnings.append(
-                f"Could not read coordinates from {self.cli_path} to "
-                f"cross-check against the supplied lat/lon: {e}"
+                f"Could not read {self.cli_path} to cross-check against the "
+                f"supplied lat/lon/start_year/end_year: {e}"
             )
             cli_info = None
 
@@ -110,6 +121,33 @@ class SiteInputs:
                     "(~5 km). Please double check this is intentional."
                 )
 
+            if cli_info.start_year is not None:
+                if self.start_year is None:
+                    self.start_year = cli_info.start_year
+                elif self.start_year != cli_info.start_year:
+                    self.warnings.append(
+                        f"supplied start_year={self.start_year} differs from "
+                        f"{self.cli_path}'s own @START value ({cli_info.start_year})."
+                        "Please double check this is intentional."
+                    )
+            if cli_info.end_year is not None:
+                if self.end_year is None:
+                    self.end_year = cli_info.end_year
+                elif self.end_year != cli_info.end_year:
+                    self.warnings.append(
+                        f"supplied end_year={self.end_year} differs from "
+                        f"{self.cli_path}'s own @START+DURN-derived value "
+                        f"({cli_info.end_year}). Please double check this is intentional "
+                        "(a real example of this in this project: ALLE.CLI's DURN "
+                        "implies end year 2018, not the 2019 used elsewhere)."
+                    )
+
+        if self.start_year is None or self.end_year is None:
+            raise ValueError(
+                "start_year/end_year not supplied, and could not be derived "
+                f"from {self.cli_path} (no usable '@START DURN ...' header found)."
+            )
+
 
 @dataclass
 class ForecastInputs:
@@ -124,18 +162,71 @@ class ForecastInputs:
     iterations: int = 0
 
 
-@dataclass
-class ToolPaths:
-    """External executables this pipeline shells out to. No hardcoded names
-    or locations; both must be supplied explicitly."""
+def _default_bin_dir() -> Path:
+    """This installed package's own checkout location on disk, + "bin".
+    Works for an editable install (see this project's README); a
+    non-editable wheel install has no meaningful checkout root, so this
+    just won't find anything there, falling through to the error in
+    _resolve_binary below."""
+    return Path(__file__).resolve().parent.parent.parent / "bin"
 
-    fresampler_bin: Path
-    wtd2wth_bin: Path
-    seed: int = 42      # explicit seed for the ported PT binary
+
+def _resolve_binary(explicit: str | Path | None, env_var: str, default_name: str,
+                     bin_dir: Path | None = None) -> Path:
+    """
+    Resolve an external tool binary's path, in priority order:
+      1. explicit path, if given (a CLI flag or a direct ToolPaths argument)
+      2. the environment variable named by env_var, if set
+      3. bin_dir/<default_name> (bin_dir defaults to _default_bin_dir() -
+         this checkout's own bin/ folder; but is an explicit parameter so
+         it can be pointed elsewhere, e.g. in tests)
+
+    Does NOT check that the resolved path is actually executable, or even
+    exists, when it came from an explicit path or env var. Those are trusted as given.
+    """
+    if explicit is not None:
+        return Path(explicit)
+
+    env_val = os.environ.get(env_var)
+    if env_val:
+        return Path(env_val)
+
+    if bin_dir is None:
+        bin_dir = _default_bin_dir()
+    candidate = bin_dir / default_name
+    if candidate.exists():
+        return candidate
+
+    raise FileNotFoundError(
+        f"Could not resolve a path for {default_name!r}. Provide one via "
+        "(in priority order): an explicit --fresampler-bin/--wtd2wth-bin "
+        f"flag (or ToolPaths argument), the {env_var} environment variable, "
+        f"or by placing the binary at {candidate} (this project's own bin/ folder."
+    )
+
+
+@dataclass(kw_only=True)
+class ToolPaths:
+    """External executables this pipeline shells out to.
+
+    fresampler_bin/wtd2wth_bin are optional: if omitted, resolved via _resolve_binary().
+    Raises FileNotFoundError if none of those resolve to anything.
+    """
+
+    fresampler_bin: Path | None = None
+    wtd2wth_bin: Path | None = None
+    bin_dir: Path | None = None  # override for _default_bin_dir(); mainly for tests
+    seed: int = 42  # explicit seed to make PT runs reproducible
 
     def __post_init__(self):
-        self.fresampler_bin = Path(self.fresampler_bin)
-        self.wtd2wth_bin = Path(self.wtd2wth_bin)
+        self.fresampler_bin = _resolve_binary(
+            self.fresampler_bin, "SCF2WTH_FRESAMPLER_BIN", "fresampler_pt_patched",
+            bin_dir=self.bin_dir,
+        )
+        self.wtd2wth_bin = _resolve_binary(
+            self.wtd2wth_bin, "SCF2WTH_WTD2WTH_BIN", "wtd2wth",
+            bin_dir=self.bin_dir,
+        )
 
 
 # Stage 1: paramPT.txt (via scfbridge)
@@ -192,10 +283,9 @@ def site_planting_month(forecast: ForecastInputs) -> int:
 
 def run_fresampler(site: SiteInputs, tools: ToolPaths, work_dir: Path) -> list[Path]:
     """
-    Stage the .CLI/.WTD inputs and paramPT.txt into work_dir (FResampler1_PT
-        does its own file I/O relative to the current working directory), 
-    Run the fresampler binary, and 
-    Return the list of generated .WTD realization files.
+    Stage the .CLI/.WTD inputs and paramPT.txt into work_dir 
+        (FResampler1_PT does its own file I/O relative to the current working directory). 
+    Run the fresampler binary, and return the list of generated .WTD realization files.
 
     Assumes build_param_pt() already wrote work_dir/paramPT.txt.
     """
@@ -362,11 +452,20 @@ def _cmd_run(args: argparse.Namespace) -> None:
         factor_r_temp=args.factor_r_temp,
         iterations=args.iterations,
     )
-    tools = ToolPaths(
-        fresampler_bin=Path(args.fresampler_bin),
-        wtd2wth_bin=Path(args.wtd2wth_bin),
-        seed=args.seed,
-    )
+
+    try:
+        tools = ToolPaths(
+            fresampler_bin=args.fresampler_bin,
+            wtd2wth_bin=args.wtd2wth_bin,
+            bin_dir=Path(args.bin_dir) if args.bin_dir else None,
+            seed=args.seed,
+        )
+    except FileNotFoundError as e:
+        print(f"scf2wth: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"scf2wth: using fresampler_bin={tools.fresampler_bin}", file=sys.stderr)
+    print(f"scf2wth: using wtd2wth_bin={tools.wtd2wth_bin}", file=sys.stderr)
 
     try:
         wth_files = run_pipeline(
@@ -402,9 +501,9 @@ def main() -> None:
     site_group.add_argument("--lon", type=float, default=None, help="optional - read from the .CLI file if omitted")
     site_group.add_argument("--cli", required=True, help="path to the site's .CLI file")
     site_group.add_argument("--wtd", required=True, help="path to the site's historical baseline .WTD file")
-    site_group.add_argument("--station", required=True, help="4-letter station code, must match .CLI/.WTD filenames")
-    site_group.add_argument("--start-year", type=int, required=True)
-    site_group.add_argument("--end-year", type=int, required=True)
+    site_group.add_argument("--station", default=None, help="4-letter station code; defaults to the .CLI/.WTD filename")
+    site_group.add_argument("--start-year", type=int, default=None, help="optional - read from the .CLI file's @START if omitted")
+    site_group.add_argument("--end-year", type=int, default=None, help="optional - derived from the .CLI file's @START+DURN if omitted")
 
     forecast_group = p_run.add_argument_group("forecast")
     forecast_group.add_argument("--year", type=int, required=True)
@@ -416,8 +515,9 @@ def main() -> None:
     forecast_group.add_argument("--iterations", type=int, default=0)
 
     tools_group = p_run.add_argument_group("tools")
-    tools_group.add_argument("--fresampler-bin", required=True, help="path to the compiled FResampler1_PT binary")
-    tools_group.add_argument("--wtd2wth-bin", required=True, help="path to the compiled wtd2wth binary")
+    tools_group.add_argument("--fresampler-bin", default=None, help="path to the compiled FResampler1_PT binary; optional - see README for auto-discovery order")
+    tools_group.add_argument("--wtd2wth-bin", default=None, help="path to the compiled wtd2wth binary; optional - see README for auto-discovery order")
+    tools_group.add_argument("--bin-dir", default=None, help="override the default bin/ folder location used as the last-resort auto-discovery step")
     tools_group.add_argument("--seed", type=int, default=42, help="explicit RNG seed for fresampler (see project history: this is what makes runs reproducible)")
 
     output_group = p_run.add_argument_group("output")

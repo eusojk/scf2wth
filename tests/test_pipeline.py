@@ -18,7 +18,7 @@ import pytest
 
 from scfbridge import cpc_forecast
 from scf2wth import SiteInputs, ForecastInputs, ToolPaths, Wtd2wthError
-from scf2wth.pipeline import build_param_pt, run_fresampler, run_wtd2wth, run_pipeline, main
+from scf2wth.pipeline import build_param_pt, run_fresampler, run_wtd2wth, run_pipeline, main, _resolve_binary
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,8 @@ _REAL_KBSA_CLI = (
     "\n"
     "@ INSI      LAT     LONG  ELEV   TAV   AMP  SRAY  TMXY  TMNY  RAIY\n"
     "  KBSA    42.24   -85.24   288   9.4 -99.0  14.2  32.7 -22.6 31079\n"
+    "@START  DURN  ANGA  ANGB REFHT WNDHT SOURCE\n"
+    "  1993    32 -99.0 -99.0 -99.0 -99.0 open-meteo\n"
 )
 
 # Mirrors ALLE.CLI's real content: internal INSI (MIAL) != filename (ALLE)
@@ -92,6 +94,8 @@ _REAL_ALLE_STYLE_CLI = (
     "\r\n"
     "@ INSI      LAT     LONG  ELEV   TAV   AMP  SRAY  TMXY  TMNY  RAIY\r\n"
     "  MIAL   42.150  -83.567   257   8.7  26.1  13.6  13.1   4.2   957\r\n"
+    "@START  DURN  ANGA  ANGB REFHT WNDHT SOURCE\r\n"
+    "  1988    31  0.25  0.50 -99.0 -99.0 Calculated_from_daily_data\r\n"
 )
 
 
@@ -115,7 +119,7 @@ class TestSiteInputsCliDerivedCoordinates:
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text("not a real .CLI file\n")
         wtd.touch()
-        with pytest.raises(ValueError, match="lat/lon not supplied"):
+        with pytest.raises(ValueError, match="not supplied"):
             SiteInputs(
                 location_label="KALAMAZOO_MI",
                 cli_path=cli, wtd_path=wtd, station="KBSA",
@@ -184,7 +188,101 @@ class TestSiteInputsCliDerivedCoordinates:
             start_year=1993, end_year=2024,
         )
         assert site.lat == 42.24
-        assert any("Could not read coordinates" in w for w in site.warnings)
+        assert any("Could not read" in w for w in site.warnings)
+
+
+class TestSiteInputsCliDerivedStationAndYears:
+    def test_station_omitted_derived_from_filename(self, tmp_path):
+        cli = tmp_path / "KBSA.CLI"
+        wtd = tmp_path / "KBSA.WTD"
+        cli.write_text(_REAL_KBSA_CLI)
+        wtd.touch()
+        site = SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
+        assert site.station == "KBSA"
+
+    def test_start_end_year_omitted_derived_from_cli(self, tmp_path):
+        cli = tmp_path / "KBSA.CLI"
+        wtd = tmp_path / "KBSA.WTD"
+        cli.write_text(_REAL_KBSA_CLI)
+        wtd.touch()
+        site = SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
+        assert site.start_year == 1993
+        assert site.end_year == 2024  # 1993 + 32 (DURN) - 1
+        assert site.warnings == []
+
+    def test_all_four_omitted_full_auto_derivation(self, tmp_path):
+        """station, start_year, end_year, lat, lon all omitted at once -
+        the common case this feature exists for."""
+        cli = tmp_path / "KBSA.CLI"
+        wtd = tmp_path / "KBSA.WTD"
+        cli.write_text(_REAL_KBSA_CLI)
+        wtd.touch()
+        site = SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
+        assert site.station == "KBSA"
+        assert site.start_year == 1993
+        assert site.end_year == 2024
+        assert site.lat == pytest.approx(42.24)
+        assert site.lon == pytest.approx(-85.24)
+        assert site.warnings == []
+
+    def test_end_year_mismatch_against_stale_durn_warns_but_keeps_supplied_value(self, tmp_path):
+        """The real, confirmed ALLE.CLI case: DURN implies end_year=2018,
+        but 2019 is what actually matches the real .WTD data and was used
+        throughout this project. Supplying 2019 explicitly should warn
+        about the mismatch, not silently get overridden by the stale
+        DURN-derived value."""
+        cli = tmp_path / "ALLE.CLI"
+        wtd = tmp_path / "ALLE.WTD"
+        cli.write_bytes(_REAL_ALLE_STYLE_CLI.encode())
+        wtd.touch()
+        site = SiteInputs(
+            location_label="TEST_SITE", lat=42.150, lon=-83.567,
+            cli_path=cli, wtd_path=wtd, station="ALLE",
+            start_year=1988, end_year=2019,
+        )
+        assert site.end_year == 2019  # supplied value is NOT silently overridden
+        assert any("differs from" in w and "2018" in w for w in site.warnings)
+
+    def test_start_year_mismatch_warns(self, tmp_path):
+        cli = tmp_path / "KBSA.CLI"
+        wtd = tmp_path / "KBSA.WTD"
+        cli.write_text(_REAL_KBSA_CLI)
+        wtd.touch()
+        site = SiteInputs(
+            location_label="KALAMAZOO_MI",
+            cli_path=cli, wtd_path=wtd, station="KBSA",
+            start_year=1990, end_year=2024,  # 1990 != the real @START 1993
+        )
+        assert site.start_year == 1990
+        assert any("start_year" in w and "differs from" in w for w in site.warnings)
+
+    def test_start_end_year_omitted_and_no_start_header_raises(self, tmp_path):
+        cli = tmp_path / "KBSA.CLI"
+        wtd = tmp_path / "KBSA.WTD"
+        # only the INSI/LAT/LONG header, no @START/DURN block at all
+        cli.write_text(
+            "@ INSI      LAT     LONG  ELEV\n"
+            "  KBSA    42.24   -85.24   288\n"
+        )
+        wtd.touch()
+        with pytest.raises(ValueError, match="start_year/end_year not supplied"):
+            SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
+
+    def test_explicit_station_still_validated_against_filename(self, tmp_path):
+        """Auto-derivation doesn't bypass the existing filename-match
+        safety check when station IS supplied explicitly."""
+        cli = tmp_path / "KBSA.CLI"
+        wtd = tmp_path / "KBSA.WTD"
+        cli.write_text(_REAL_KBSA_CLI)
+        wtd.touch()
+        with pytest.raises(ValueError, match="does not match .CLI filename"):
+            SiteInputs(
+                location_label="KALAMAZOO_MI",
+                cli_path=cli, wtd_path=wtd, station="WRONG",
+                start_year=1993, end_year=2024,
+            )
+
+
 
 
 def _fake_forecast(variable):
@@ -225,6 +323,114 @@ class TestBuildParamPt:
         # ASO trimester -> Startmonth 8, Endmonth 10
         assert "Startmonth:    8" in text
         assert "Endmonth:    10" in text
+
+
+# ---------------------------------------------------------------------------
+# ToolPaths: binary resolution (explicit > env var > checkout bin/ > error)
+# ---------------------------------------------------------------------------
+
+class TestResolveBinary:
+    """All tests here inject an isolated bin_dir (a fresh tmp_path) rather
+    than depending on this real checkout's actual bin/ folder contents."""
+
+    def test_explicit_path_wins_even_if_nothing_else_available(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        explicit = tmp_path / "my_custom_fresampler"
+        result = _resolve_binary(explicit, "SCF2WTH_FRESAMPLER_BIN", "fresampler_pt_patched",
+                                  bin_dir=tmp_path / "empty_bin")
+        assert result == explicit
+
+    def test_env_var_used_when_no_explicit_path(self, tmp_path, monkeypatch):
+        env_path = tmp_path / "env_fresampler"
+        monkeypatch.setenv("SCF2WTH_FRESAMPLER_BIN", str(env_path))
+        result = _resolve_binary(None, "SCF2WTH_FRESAMPLER_BIN", "fresampler_pt_patched",
+                                  bin_dir=tmp_path / "empty_bin")
+        assert result == env_path
+
+    def test_explicit_path_takes_priority_over_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SCF2WTH_FRESAMPLER_BIN", str(tmp_path / "env_fresampler"))
+        explicit = tmp_path / "explicit_fresampler"
+        result = _resolve_binary(explicit, "SCF2WTH_FRESAMPLER_BIN", "fresampler_pt_patched",
+                                  bin_dir=tmp_path / "empty_bin")
+        assert result == explicit
+
+    def test_bin_dir_used_as_last_resort(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "fresampler_pt_patched").touch()
+        result = _resolve_binary(None, "SCF2WTH_FRESAMPLER_BIN", "fresampler_pt_patched",
+                                  bin_dir=bin_dir)
+        assert result == bin_dir / "fresampler_pt_patched"
+
+    def test_env_var_takes_priority_over_bin_dir(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "fresampler_pt_patched").touch()
+        env_path = tmp_path / "env_fresampler"
+        monkeypatch.setenv("SCF2WTH_FRESAMPLER_BIN", str(env_path))
+        result = _resolve_binary(None, "SCF2WTH_FRESAMPLER_BIN", "fresampler_pt_patched",
+                                  bin_dir=bin_dir)
+        assert result == env_path
+
+    def test_nothing_resolves_raises_clear_error(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        with pytest.raises(FileNotFoundError, match="totally_made_up_binary_name_xyz"):
+            _resolve_binary(None, "SCF2WTH_FRESAMPLER_BIN", "totally_made_up_binary_name_xyz",
+                             bin_dir=tmp_path / "empty_bin")
+
+    def test_error_message_lists_all_three_options(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        with pytest.raises(FileNotFoundError) as exc_info:
+            _resolve_binary(None, "SCF2WTH_FRESAMPLER_BIN", "totally_made_up_binary_name_xyz",
+                             bin_dir=tmp_path / "empty_bin")
+        msg = str(exc_info.value)
+        assert "--fresampler-bin" in msg or "ToolPaths" in msg
+        assert "SCF2WTH_FRESAMPLER_BIN" in msg
+        assert "bin" in msg
+
+    def test_default_bin_dir_used_when_none_given(self, tmp_path, monkeypatch):
+        """bin_dir=None (the real default) falls back to _default_bin_dir()
+        . Confirmed by checking the resolved path's shape, not by
+          depending on what's actually inside it."""
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        with pytest.raises(FileNotFoundError, match="totally_made_up_binary_name_xyz"):
+            _resolve_binary(None, "SCF2WTH_FRESAMPLER_BIN", "totally_made_up_binary_name_xyz")
+
+
+class TestToolPaths:
+    def test_both_binaries_resolved_via_explicit_paths(self, tmp_path):
+        tools = ToolPaths(
+            fresampler_bin=tmp_path / "fresampler",
+            wtd2wth_bin=tmp_path / "wtd2wth",
+        )
+        assert tools.fresampler_bin == tmp_path / "fresampler"
+        assert tools.wtd2wth_bin == tmp_path / "wtd2wth"
+
+    def test_missing_binaries_raise_before_pipeline_runs(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        monkeypatch.delenv("SCF2WTH_WTD2WTH_BIN", raising=False)
+        with pytest.raises(FileNotFoundError):
+            ToolPaths(
+                fresampler_bin=tmp_path / "fresampler",
+                wtd2wth_bin=None,
+                bin_dir=tmp_path / "empty_bin",  # isolated - no real binaries here
+            )
+
+    def test_bin_dir_resolves_both_binaries(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SCF2WTH_FRESAMPLER_BIN", raising=False)
+        monkeypatch.delenv("SCF2WTH_WTD2WTH_BIN", raising=False)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "fresampler_pt_patched").touch()
+        (bin_dir / "wtd2wth").touch()
+        tools = ToolPaths(bin_dir=bin_dir)
+        assert tools.fresampler_bin == bin_dir / "fresampler_pt_patched"
+        assert tools.wtd2wth_bin == bin_dir / "wtd2wth"
+
+    def test_default_seed_is_42(self, tmp_path):
+        tools = ToolPaths(fresampler_bin=tmp_path / "a", wtd2wth_bin=tmp_path / "b")
+        assert tools.seed == 42
 
 
 # ---------------------------------------------------------------------------

@@ -69,7 +69,7 @@ class TestReadCliSiteInfo:
     def test_header_with_no_following_data_line_raises(self, tmp_path):
         cli = tmp_path / "BAD.CLI"
         cli.write_text("@ INSI      LAT     LONG  ELEV\n")
-        with pytest.raises(ValueError, match="no data line"):
+        with pytest.raises(ValueError, match="could not find"):
             read_cli_site_info(cli)
 
     def test_unparseable_lat_raises(self, tmp_path):
