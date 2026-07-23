@@ -18,7 +18,7 @@ dev = [
 ]
 
 [project.scripts]
-scf2wth = "scf2wth:main"
+scf2wth = "scf2wth.pipeline:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
