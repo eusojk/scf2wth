@@ -12,7 +12,7 @@ scfbridge (plan -> fetch -> render paramPT.txt)
 
 ## Install
 
-Depends on `scfbridge` as a local path dependency:
+Depends on [`scfbridge`](https://github.com/eusojk/scfbridge) as a local path dependency:
 
 ```
 <parent-dir>/
