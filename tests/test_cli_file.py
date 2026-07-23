@@ -7,22 +7,13 @@ during development (KBSA.CLI: LF line endings; ALLE.CLI: CRLF line
 endings, and an internal INSI ("MIAL") that doesn't match its own
 filename ("ALLE") - a real mismatch, not a hypothetical one).
 """
+from pathlib import Path
 
 import pytest
 
 from scf2wth.cli_file import read_cli_site_info
 
-
-KBSA_STYLE_CONTENT = (
-    "*CLIMATE:KBSA\n"
-    "\n"
-    "@ INSI      LAT     LONG  ELEV   TAV   AMP  SRAY  TMXY  TMNY  RAIY\n"
-    "  KBSA    42.24   -85.24   288   9.4 -99.0  14.2  32.7 -22.6 31079\n"
-    "@START  DURN  ANGA  ANGB REFHT WNDHT SOURCE\n"
-    "  1993    32 -99.0 -99.0 -99.0 -99.0 open-meteo\n"
-    "@ GSST  GSDU\n"
-    "     1   365\n"
-)
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 # Mirrors ALLE.CLI's real content: CRLF endings, filename/INSI mismatch
 ALLE_STYLE_CONTENT = (
@@ -36,14 +27,15 @@ ALLE_STYLE_CONTENT = (
 
 
 class TestReadCliSiteInfo:
-    def test_lf_line_endings(self, tmp_path):
-        cli = tmp_path / "KBSA.CLI"
-        cli.write_text(KBSA_STYLE_CONTENT)
-        info = read_cli_site_info(cli)
+    def test_lf_line_endings(self):
+        """Reads the real, committed KBSA.CLI fixture directly"""
+        info = read_cli_site_info(FIXTURES_DIR / "KBSA.CLI")
         assert info.insi == "KBSA"
         assert info.lat == pytest.approx(42.24)
         assert info.lon == pytest.approx(-85.24)
         assert info.elev == pytest.approx(288.0)
+        assert info.start_year == 1993
+        assert info.end_year == 2024  # 1993 + 32 (DURN) - 1
 
     def test_crlf_line_endings(self, tmp_path):
         cli = tmp_path / "ALLE.CLI"

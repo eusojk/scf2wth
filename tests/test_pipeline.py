@@ -20,6 +20,8 @@ from scfbridge import cpc_forecast
 from scf2wth import SiteInputs, ForecastInputs, ToolPaths, Wtd2wthError
 from scf2wth.pipeline import build_param_pt, run_fresampler, run_wtd2wth, run_pipeline, main, _resolve_binary
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
 
 # ---------------------------------------------------------------------------
 # SiteInputs validation
@@ -79,14 +81,9 @@ class TestSiteInputs:
 # SiteInputs: lat/lon auto-derivation and cross-check against the .CLI file
 # ---------------------------------------------------------------------------
 
-_REAL_KBSA_CLI = (
-    "*CLIMATE:KBSA\n"
-    "\n"
-    "@ INSI      LAT     LONG  ELEV   TAV   AMP  SRAY  TMXY  TMNY  RAIY\n"
-    "  KBSA    42.24   -85.24   288   9.4 -99.0  14.2  32.7 -22.6 31079\n"
-    "@START  DURN  ANGA  ANGB REFHT WNDHT SOURCE\n"
-    "  1993    32 -99.0 -99.0 -99.0 -99.0 open-meteo\n"
-)
+
+_REAL_KBSA_CLI = (FIXTURES_DIR / "KBSA.CLI").read_text()
+_REAL_KBSA_WTD = (FIXTURES_DIR / "KBSA.WTD").read_text()
 
 # Mirrors ALLE.CLI's real content: internal INSI (MIAL) != filename (ALLE)
 _REAL_ALLE_STYLE_CLI = (
@@ -104,7 +101,7 @@ class TestSiteInputsCliDerivedCoordinates:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(
             location_label="KALAMAZOO_MI",
             cli_path=cli, wtd_path=wtd, station="KBSA",
@@ -130,7 +127,7 @@ class TestSiteInputsCliDerivedCoordinates:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(
             location_label="KALAMAZOO_MI", lat=42.24, lon=-85.24,
             cli_path=cli, wtd_path=wtd, station="KBSA",
@@ -142,7 +139,7 @@ class TestSiteInputsCliDerivedCoordinates:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(
             location_label="KALAMAZOO_MI", lat=40.0, lon=-85.24,  # lat way off
             cli_path=cli, wtd_path=wtd, station="KBSA",
@@ -155,7 +152,7 @@ class TestSiteInputsCliDerivedCoordinates:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(
             location_label="KALAMAZOO_MI", lat=42.241, lon=-85.24,  # 0.001 off
             cli_path=cli, wtd_path=wtd, station="KBSA",
@@ -196,7 +193,7 @@ class TestSiteInputsCliDerivedStationAndYears:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
         assert site.station == "KBSA"
 
@@ -204,7 +201,7 @@ class TestSiteInputsCliDerivedStationAndYears:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
         assert site.start_year == 1993
         assert site.end_year == 2024  # 1993 + 32 (DURN) - 1
@@ -216,7 +213,7 @@ class TestSiteInputsCliDerivedStationAndYears:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(location_label="KALAMAZOO_MI", cli_path=cli, wtd_path=wtd)
         assert site.station == "KBSA"
         assert site.start_year == 1993
@@ -247,7 +244,7 @@ class TestSiteInputsCliDerivedStationAndYears:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         site = SiteInputs(
             location_label="KALAMAZOO_MI",
             cli_path=cli, wtd_path=wtd, station="KBSA",
@@ -274,7 +271,7 @@ class TestSiteInputsCliDerivedStationAndYears:
         cli = tmp_path / "KBSA.CLI"
         wtd = tmp_path / "KBSA.WTD"
         cli.write_text(_REAL_KBSA_CLI)
-        wtd.touch()
+        wtd.write_text(_REAL_KBSA_WTD)
         with pytest.raises(ValueError, match="does not match .CLI filename"):
             SiteInputs(
                 location_label="KALAMAZOO_MI",

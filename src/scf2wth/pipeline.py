@@ -201,7 +201,7 @@ def _resolve_binary(explicit: str | Path | None, env_var: str, default_name: str
         f"Could not resolve a path for {default_name!r}. Provide one via "
         "(in priority order): an explicit --fresampler-bin/--wtd2wth-bin "
         f"flag (or ToolPaths argument), the {env_var} environment variable, "
-        f"or by placing the binary at {candidate} (this project's own bin/ folder."
+        f"or by placing the binary at {candidate} (this project's own bin/ folder)."
     )
 
 
