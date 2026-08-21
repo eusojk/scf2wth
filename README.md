@@ -1,13 +1,12 @@
 # scf2wth
 
-Orchestrates the full chain from a seasonal climate forecast to DSSAT-ready
-`.WTH` files:
+Orchestrates the full chain from a seasonal climate forecast to DSSAT-ready `.WTH` files:
 
 ```
 scfbridge (plan -> fetch -> render paramPT.txt)
     -> fresampler  (FResampler1_PT: paramPT.txt -> N .WTD realizations)
-    -> wtd2wth     (.CLI + all .WTD realizations, ONE call -> .WTH files)
-    -> saved into a dedicated output folder for DSSAT experiments
+    -> wtd2wth     (.CLI + all .WTD realizations -> .WTH files)
+    -> saved into user-defined output folder
 ```
 
 ## Install
@@ -41,7 +40,7 @@ uv run scf2wth run \
 Notes: 
  * See "Auto-derived fields" below for Optional fields.
  * Run `scf2wth run --help` for every option, including `--json`, `--legacy`, and the tercile/factor overrides.
- * Prints one `.WTH` path per line on success (or a single JSON document with `--json`); non-zero exit with a one-line `scf2wth: <ErrorType>: <message>` on failure, no raw traceback.
+ * Prints one `.WTH` path per line on success (or a single JSON document with `--json`); non-zero exit with a one-line `scf2wth: <ErrorType>: <message>` on failure.
 
 
 ### As a library:
@@ -88,20 +87,20 @@ If you supply any of these explicitly anyway, they're cross-checked against the 
 
 1. `--fresampler-bin`/`--wtd2wth-bin` (or the `ToolPaths` constructor args)
 2. `$SCF2WTH_FRESAMPLER_BIN` / `$SCF2WTH_WTD2WTH_BIN` environment variables
-3. `bin/fresampler_pt_patched` / `bin/wtd2wth` inside this checkout
-   (gitignored - populate it yourself; not shipped in version control)
+3. `bin/fresampler_pt_patched` / `bin/wtd2wth`
 
-Raises `FileNotFoundError` listing all three options if none resolve.
+Raises `FileNotFoundError` listing all three options if none.
 
 
 ## Known limitation(s): 
 
-This can hang indefinitely on cold-season forecasts:
+* Supported platform(s): Linux
 
- * `FResampler`'s year-sampling loop rejects any candidate year whose seasonal average temperature is `<= 0.0`, using that as a (mistaken) proxy for "missing data." 
-    * At a cold-climate site, the coldest tercile of historical years can end up with *every member* below zero; causing the process to spin forever with zero chance of success.
-    * This is most likely in the original Fortran algorithm and is being tracked as a separate fix, not yet applied here. 
- * So, if a run seems to hang with no new `.WTD` files appearing for several minutes, especially for a winter-anchored trimester (JFM, DJF, NDJ) at a cold-climate site, this is almost certainly why. The current workaround is to just kill that process.
+* Script can hang indefinitely on cold-season forecasts:
+     * `FResampler`'s year-sampling loop rejects any candidate year whose seasonal average temperature is `<= 0.0`, using that as a (mistaken) proxy for "missing data." 
+        * At a cold-climate site, the coldest tercile of historical years can end up with *every member* below zero; causing the process to spin forever with zero chance of success.
+        * This is most likely in the original Fortran algorithm and is being tracked as a separate fix, not yet applied here. 
+     * So, if a run seems to hang with no new `.WTD` files appearing for several minutes, especially for a winter-anchored trimester (JFM, DJF, NDJ) at a cold-climate site, this is almost certainly why. The current workaround is to just kill that process.
 
 ## Acknowledgements
 
